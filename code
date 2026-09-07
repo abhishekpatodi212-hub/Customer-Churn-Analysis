@@ -1,0 +1,130 @@
+import sys, pandas as pd
+sys.path.insert(0, "/home/claude/portfolio")
+from _xlsx_helpers import *
+from openpyxl import Workbook
+from openpyxl.chart import Reference
+from openpyxl.drawing.image import Image as XLImage
+
+df = pd.read_csv("churn_risk_scores.csv")
+keep_cols = ["CustomerID","Gender","Age","TenureMonths","ContractType","InternetService",
+             "PaymentMethod","MonthlyCharges","TotalCharges","SupportCallsLast6M",
+             "TechSupport","OnlineSecurity","Region","Churned","ChurnRiskScore","RiskSegment"]
+df = df[keep_cols]
+
+wb = Workbook()
+ws_data = wb.active
+ws_data.title = "Raw Data"
+last_row = write_df_as_table(ws_data, df, table_name="ChurnData")
+ws_data.freeze_panes = "A2"
+# N=Churned O=ChurnRiskScore P=RiskSegment ; E=ContractType K=SupportCallsLast6M
+
+ws = wb.create_sheet("Summary")
+ws["A1"] = "CUSTOMER CHURN ANALYSIS — SUMMARY DASHBOARD"
+ws["A1"].font = title_font(16)
+ws.merge_cells("A1:H1")
+
+add_kpi_card(ws, 3, 1, "TOTAL CUSTOMERS", f"=COUNTA('Raw Data'!A2:A{last_row})", "#,##0", 2)
+add_kpi_card(ws, 3, 3, "CHURN RATE", f"=COUNTIF('Raw Data'!N2:N{last_row},\"Yes\")/COUNTA('Raw Data'!N2:N{last_row})", "0.0%", 2)
+add_kpi_card(ws, 3, 5, "MONTHLY REVENUE AT RISK (₹)", f"=SUMIF('Raw Data'!N2:N{last_row},\"Yes\",'Raw Data'!H2:H{last_row})", "₹#,##0", 2)
+add_kpi_card(ws, 3, 7, "HIGH-RISK CUSTOMERS", f"=COUNTIF('Raw Data'!P2:P{last_row},\"High\")", "#,##0", 2)
+
+# Contract type table
+contracts = sorted(df["ContractType"].unique())
+ws["A7"] = "Churn Rate by Contract Type"
+ws["A7"].font = title_font(12)
+ws["A8"], ws["B8"], ws["C8"] = "ContractType", "Customers", "Churn Rate"
+style_header_row(ws, 8, 3, 1)
+for i, c in enumerate(contracts):
+    r = 9 + i
+    ws.cell(row=r, column=1, value=c)
+    ws.cell(row=r, column=2, value=f"=COUNTIF('Raw Data'!E2:E{last_row},A{r})")
+    ws.cell(row=r, column=3, value=f"=COUNTIFS('Raw Data'!E2:E{last_row},A{r},'Raw Data'!N2:N{last_row},\"Yes\")/B{r}").number_format = "0.0%"
+contract_end = 8 + len(contracts)
+
+# Risk segment table
+seg_start = contract_end + 3
+ws.cell(row=seg_start-1, column=1, value="Customers by Predicted Risk Segment").font = title_font(12)
+ws.cell(row=seg_start, column=1, value="RiskSegment")
+ws.cell(row=seg_start, column=2, value="Customers")
+style_header_row(ws, seg_start, 2, 1)
+for i, s in enumerate(["Low","Medium","High"]):
+    r = seg_start + 1 + i
+    ws.cell(row=r, column=1, value=s)
+    ws.cell(row=r, column=2, value=f"=COUNTIF('Raw Data'!P2:P{last_row},A{r})")
+seg_end = seg_start + 3
+
+# Support calls table
+sup_start = seg_end + 3
+ws.cell(row=sup_start-1, column=1, value="Churn Rate by Support Calls (last 6 months)").font = title_font(12)
+ws.cell(row=sup_start, column=1, value="SupportCalls")
+ws.cell(row=sup_start, column=2, value="Churn Rate")
+style_header_row(ws, sup_start, 2, 1)
+sup_vals = sorted(df["SupportCallsLast6M"].unique())
+for i, v in enumerate(sup_vals):
+    r = sup_start + 1 + i
+    ws.cell(row=r, column=1, value=v)
+    ws.cell(row=r, column=2, value=f"=COUNTIFS('Raw Data'!J2:J{last_row},A{r},'Raw Data'!N2:N{last_row},\"Yes\")/COUNTIF('Raw Data'!J2:J{last_row},A{r})").number_format = "0.0%"
+sup_end = sup_start + len(sup_vals)
+
+# Region table
+regions = sorted(df["Region"].unique())
+reg_start = sup_end + 3
+ws.cell(row=reg_start-1, column=1, value="Churn Rate by Region").font = title_font(12)
+ws.cell(row=reg_start, column=1, value="Region")
+ws.cell(row=reg_start, column=2, value="Churn Rate")
+style_header_row(ws, reg_start, 2, 1)
+for i, rg in enumerate(regions):
+    r = reg_start + 1 + i
+    ws.cell(row=r, column=1, value=rg)
+    ws.cell(row=r, column=2, value=f"=COUNTIFS('Raw Data'!M2:M{last_row},A{r},'Raw Data'!N2:N{last_row},\"Yes\")/COUNTIF('Raw Data'!M2:M{last_row},A{r})").number_format = "0.0%"
+reg_end = reg_start + len(regions)
+
+set_col_widths(ws, {"A": 22, "B": 16, "C": 16, "D": 16, "E": 16, "F": 16, "G": 16, "H": 16})
+
+# ---- Charts sheet ----
+wsc = wb.create_sheet("Dashboard Charts")
+wsc["A1"] = "CUSTOMER CHURN — VISUAL DASHBOARD"
+wsc["A1"].font = title_font(16)
+wsc.merge_cells("A1:J1")
+
+add_bar_chart(wsc, "A3", "Churn Rate by Contract Type",
+              Reference(ws, min_col=3, max_col=3, min_row=8, max_row=contract_end),
+              Reference(ws, min_col=1, max_col=1, min_row=9, max_row=contract_end),
+              y_title="Churn Rate", bar_color="D9534F")
+
+add_pie_chart(wsc, "K3", "Customers by Predicted Risk Segment",
+              Reference(ws, min_col=2, max_col=2, min_row=seg_start, max_row=seg_end),
+              Reference(ws, min_col=1, max_col=1, min_row=seg_start+1, max_row=seg_end))
+
+add_bar_chart(wsc, "A21", "Churn Rate by Support Calls",
+              Reference(ws, min_col=2, max_col=2, min_row=sup_start, max_row=sup_end),
+              Reference(ws, min_col=1, max_col=1, min_row=sup_start+1, max_row=sup_end),
+              y_title="Churn Rate", bar_color=BLUE)
+
+add_bar_chart(wsc, "K21", "Churn Rate by Region",
+              Reference(ws, min_col=2, max_col=2, min_row=reg_start, max_row=reg_end),
+              Reference(ws, min_col=1, max_col=1, min_row=reg_start+1, max_row=reg_end),
+              y_title="Churn Rate", bar_color=NAVY)
+
+# ---- Model insights sheet (embeds Python model output images) ----
+wsm = wb.create_sheet("Model Insights (Python)")
+wsm["A1"] = "PREDICTIVE MODEL — LOGISTIC REGRESSION (built in Python/scikit-learn)"
+wsm["A1"].font = title_font(14)
+wsm.merge_cells("A1:H1")
+perf = pd.read_csv("model_performance_metrics.csv")
+wsm["A3"] = "Model Performance Metrics"
+wsm["A3"].font = title_font(12)
+for j, col in enumerate(perf.columns):
+    wsm.cell(row=4, column=1+j, value=col)
+    wsm.cell(row=5, column=1+j, value=round(float(perf[col].iloc[0]), 3))
+style_header_row(wsm, 4, len(perf.columns), 1)
+try:
+    img1 = XLImage("feature_importance.png"); img1.width, img1.height = 520, 440
+    wsm.add_image(img1, "A8")
+    img2 = XLImage("confusion_matrix.png"); img2.width, img2.height = 380, 320
+    wsm.add_image(img2, "H8")
+except Exception as e:
+    print("image embed skipped:", e)
+
+wb.save("Customer_Churn_Dashboard.xlsx")
+print("Saved. contract_end", contract_end, "seg_end", seg_end, "sup_end", sup_end, "reg_end", reg_end)
