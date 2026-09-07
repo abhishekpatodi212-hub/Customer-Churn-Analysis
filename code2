@@ -1,0 +1,96 @@
+"""
+Customer Churn Analysis — Python component
+Stack: SQL (aggregate analysis) + Python (predictive model) + Power BI (dashboard)
+
+This script:
+1. Loads customer_churn.csv
+2. Engineers features & trains a Logistic Regression churn-prediction model
+3. Evaluates the model (accuracy, precision, recall, ROC-AUC)
+4. Exports a churn_risk_scores.csv — every customer scored with a churn
+   probability, ready to be plugged into a Power BI dashboard as a
+   "Predicted Churn Risk" table.
+5. Saves a feature-importance chart and confusion matrix as PNGs for the
+   presentation deck / dashboard.
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (accuracy_score, precision_score, recall_score,
+                              f1_score, roc_auc_score, confusion_matrix, ConfusionMatrixDisplay)
+
+df = pd.read_csv("customer_churn.csv")
+
+# ---- Feature engineering ----
+df["ChurnFlag"] = (df["Churned"] == "Yes").astype(int)
+
+cat_cols = ["Gender", "ContractType", "InternetService", "PaymentMethod",
+            "TechSupport", "OnlineSecurity", "Region"]
+num_cols = ["Age", "TenureMonths", "MonthlyCharges", "TotalCharges", "SupportCallsLast6M"]
+
+X = pd.get_dummies(df[cat_cols + num_cols], columns=cat_cols, drop_first=True)
+y = df["ChurnFlag"]
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.25, random_state=42, stratify=y
+)
+
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+model = LogisticRegression(max_iter=1000, class_weight="balanced")
+model.fit(X_train_scaled, y_train)
+
+y_pred = model.predict(X_test_scaled)
+y_prob = model.predict_proba(X_test_scaled)[:, 1]
+
+metrics = {
+    "Accuracy": accuracy_score(y_test, y_pred),
+    "Precision": precision_score(y_test, y_pred),
+    "Recall": recall_score(y_test, y_pred),
+    "F1 Score": f1_score(y_test, y_pred),
+    "ROC-AUC": roc_auc_score(y_test, y_prob),
+}
+print("Model performance:")
+for k, v in metrics.items():
+    print(f"  {k}: {v:.3f}")
+
+pd.DataFrame([metrics]).to_csv("model_performance_metrics.csv", index=False)
+
+# ---- Confusion matrix chart ----
+cm = confusion_matrix(y_test, y_pred)
+disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["Retained", "Churned"])
+fig, ax = plt.subplots(figsize=(5, 4))
+disp.plot(ax=ax, cmap="Blues", colorbar=False)
+plt.title("Churn Model — Confusion Matrix")
+plt.tight_layout()
+plt.savefig("confusion_matrix.png", dpi=150)
+plt.close()
+
+# ---- Feature importance chart ----
+coef = pd.Series(model.coef_[0], index=X.columns).sort_values()
+top_features = pd.concat([coef.head(8), coef.tail(8)])
+fig, ax = plt.subplots(figsize=(7, 6))
+colors = ["#d9534f" if v > 0 else "#5cb85c" for v in top_features.values]
+ax.barh(top_features.index, top_features.values, color=colors)
+ax.set_title("Top Drivers of Churn (Logistic Regression Coefficients)")
+ax.set_xlabel("Coefficient (red = increases churn risk, green = reduces churn risk)")
+plt.tight_layout()
+plt.savefig("feature_importance.png", dpi=150)
+plt.close()
+
+# ---- Score every customer & export for Power BI ----
+X_full_scaled = scaler.transform(X)
+df["ChurnRiskScore"] = model.predict_proba(X_full_scaled)[:, 1].round(3)
+df["RiskSegment"] = pd.cut(df["ChurnRiskScore"], bins=[0, 0.33, 0.66, 1.0],
+                            labels=["Low", "Medium", "High"])
+df.to_csv("churn_risk_scores.csv", index=False)
+
+print("\nSaved: model_performance_metrics.csv, confusion_matrix.png, "
+      "feature_importance.png, churn_risk_scores.csv")
