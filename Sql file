@@ -1,0 +1,107 @@
+/* =====================================================================
+   PROJECT: Customer Churn Analysis
+   DATASET: customer_churn.csv  (load into a table called `customers`)
+   STACK  : SQL + Python + Power BI
+   =====================================================================
+   CREATE TABLE customers (
+       CustomerID          VARCHAR(15) PRIMARY KEY,
+       Gender               VARCHAR(10),
+       Age                  INT,
+       TenureMonths         INT,
+       ContractType         VARCHAR(20),
+       InternetService      VARCHAR(20),
+       PaymentMethod        VARCHAR(30),
+       MonthlyCharges       DECIMAL(10,2),
+       TotalCharges         DECIMAL(12,2),
+       SupportCallsLast6M   INT,
+       TechSupport          VARCHAR(5),
+       OnlineSecurity       VARCHAR(5),
+       Region               VARCHAR(20),
+       Churned              VARCHAR(5)
+   );
+   ===================================================================== */
+
+-- 1. Overall churn rate
+SELECT
+    COUNT(*) AS total_customers,
+    SUM(CASE WHEN Churned='Yes' THEN 1 ELSE 0 END) AS churned_customers,
+    ROUND(SUM(CASE WHEN Churned='Yes' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS churn_rate_pct
+FROM customers;
+
+-- 2. Churn rate by contract type (biggest driver in most telecom-style datasets)
+SELECT ContractType,
+       COUNT(*) AS customers,
+       SUM(CASE WHEN Churned='Yes' THEN 1 ELSE 0 END) AS churned,
+       ROUND(SUM(CASE WHEN Churned='Yes' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS churn_rate_pct
+FROM customers
+GROUP BY ContractType
+ORDER BY churn_rate_pct DESC;
+
+-- 3. Churn rate by tenure bucket
+SELECT
+    CASE
+        WHEN TenureMonths < 12 THEN '0-11 months'
+        WHEN TenureMonths < 24 THEN '12-23 months'
+        WHEN TenureMonths < 48 THEN '24-47 months'
+        ELSE '48+ months'
+    END AS tenure_bucket,
+    COUNT(*) AS customers,
+    ROUND(SUM(CASE WHEN Churned='Yes' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS churn_rate_pct
+FROM customers
+GROUP BY tenure_bucket
+ORDER BY MIN(TenureMonths);
+
+-- 4. Churn rate by number of support calls (escalation risk signal)
+SELECT SupportCallsLast6M,
+       COUNT(*) AS customers,
+       ROUND(SUM(CASE WHEN Churned='Yes' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS churn_rate_pct
+FROM customers
+GROUP BY SupportCallsLast6M
+ORDER BY SupportCallsLast6M;
+
+-- 5. Revenue at risk (MonthlyCharges of currently-churned customers)
+SELECT
+    SUM(CASE WHEN Churned='Yes' THEN MonthlyCharges ELSE 0 END) AS monthly_revenue_lost,
+    SUM(CASE WHEN Churned='Yes' THEN MonthlyCharges ELSE 0 END) * 12 AS annualized_revenue_lost
+FROM customers;
+
+-- 6. Churn rate by payment method
+SELECT PaymentMethod,
+       COUNT(*) AS customers,
+       ROUND(SUM(CASE WHEN Churned='Yes' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS churn_rate_pct
+FROM customers
+GROUP BY PaymentMethod
+ORDER BY churn_rate_pct DESC;
+
+-- 7. Effect of add-on services (TechSupport, OnlineSecurity) on retention
+SELECT TechSupport, OnlineSecurity,
+       COUNT(*) AS customers,
+       ROUND(SUM(CASE WHEN Churned='Yes' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS churn_rate_pct
+FROM customers
+GROUP BY TechSupport, OnlineSecurity
+ORDER BY churn_rate_pct DESC;
+
+-- 8. Churn rate by region
+SELECT Region,
+       COUNT(*) AS customers,
+       ROUND(SUM(CASE WHEN Churned='Yes' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS churn_rate_pct
+FROM customers
+GROUP BY Region
+ORDER BY churn_rate_pct DESC;
+
+-- 9. High-value at-risk customers (candidates for retention outreach)
+SELECT CustomerID, ContractType, MonthlyCharges, TenureMonths, SupportCallsLast6M
+FROM customers
+WHERE Churned = 'No'
+  AND ContractType = 'Month-to-month'
+  AND SupportCallsLast6M >= 3
+  AND MonthlyCharges > (SELECT AVG(MonthlyCharges) FROM customers)
+ORDER BY MonthlyCharges DESC;
+
+-- 10. Average tenure & spend: churned vs retained
+SELECT Churned,
+       ROUND(AVG(TenureMonths),1) AS avg_tenure_months,
+       ROUND(AVG(MonthlyCharges),2) AS avg_monthly_charges,
+       ROUND(AVG(SupportCallsLast6M),1) AS avg_support_calls
+FROM customers
+GROUP BY Churned;
